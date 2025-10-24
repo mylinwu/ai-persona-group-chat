@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 // fix: Corrected import path to resolve module.
 import { Persona, Conversation, ChatMessage } from '../types/index';
-import { getAiResponseStream } from '../services/aiService';
+import { getAiResponseStream, parsePersonaFromText } from '../services/aiService';
 import { getConversationTitle, summarizeMessageIfNeeded } from '../services/conversationManager';
 // fix: Corrected import path to resolve module.
 import { CONVERSATION_DIRECTIONS, NEW_CONVERSATION_TITLE, DEFAULT_CONTEXT_WINDOW } from '../constants/index';
@@ -11,6 +11,7 @@ export const useConversations = (personas: Persona[], baseSystemPrompt: string) 
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [isInitialized, setIsInitialized] = useState(false);
 
   // 初始化:从数据库加载会话
   useEffect(() => {
@@ -61,14 +62,20 @@ export const useConversations = (personas: Persona[], baseSystemPrompt: string) 
       };
       setConversations([newConversation]);
       setActiveConversationId(newConversation.id);
+    } finally {
+      // 标记初始化完成
+      setIsInitialized(true);
     }
   }, []);
 
   // 自动保存:会话或激活 ID 变化时保存到数据库
+  // 只在初始化完成后才保存,避免在加载数据前保存空数组
   useEffect(() => {
+    if (!isInitialized) return;
+    
     db.saveConversations(conversations);
     db.saveActiveConversationId(activeConversationId);
-  }, [conversations, activeConversationId]);
+  }, [conversations, activeConversationId, isInitialized]);
   
   const addConversation = () => {
     const newConversation: Conversation = {
@@ -159,6 +166,17 @@ export const useConversations = (personas: Persona[], baseSystemPrompt: string) 
       }
     }
 
+    // 立即添加"思考中"占位消息，提供即时反馈
+    const thinkingMessageId = `${Date.now()}-thinking`;
+    const thinkingMessage: ChatMessage = {
+        id: thinkingMessageId,
+        sender: 'AI',
+        text: '思考中...',
+        avatar: { icon: '💭', bgColor: '#f1f5f9', color: '#64748b' }
+    };
+    currentMessages.push(thinkingMessage);
+    updateConversation(activeConversationId, { messages: currentMessages });
+
     try {
         const updatedConv = { ...conv, messages: currentMessages };
 
@@ -177,22 +195,21 @@ export const useConversations = (personas: Persona[], baseSystemPrompt: string) 
                 aiMessageText += chunkText;
                 if (!messageId) {
                     messageId = `${Date.now()}-ai`;
-                    let sender = 'AI';
-                    let avatar = { icon: '⏳', bgColor: '#f1f5f9', color: '#475569' };
-                    let text = aiMessageText;
+                    
+                    // 使用新的解析函数
+                    const parsed = parsePersonaFromText(aiMessageText, activePersonas);
+                    const sender = parsed.personaName || 'AI';
+                    const avatar = parsed.personaName 
+                        ? activePersonas.find(p => p.name === parsed.personaName)?.avatar || { icon: '⏳', bgColor: '#f1f5f9', color: '#475569' }
+                        : { icon: '⏳', bgColor: '#f1f5f9', color: '#475569' };
+                    const text = parsed.cleanedText || aiMessageText;
 
-                    for (const persona of activePersonas) {
-                        if (text.trim().startsWith(`${persona.name}:`)) {
-                            sender = persona.name;
-                            avatar = persona.avatar;
-                            text = text.trim().substring(persona.name.length + 1).trimStart();
-                            break;
-                        }
-                    }
-
-                    setConversations(prev => prev.map(c => 
-                        c.id === activeConversationId ? { ...c, messages: [...currentMessages, { id: messageId!, sender, text, avatar }] } : c
-                    ));
+                    // 替换"思考中"消息为实际 AI 回复
+                    setConversations(prev => prev.map(c => {
+                        if (c.id !== activeConversationId) return c;
+                        const messagesWithoutThinking = c.messages.filter(m => m.id !== thinkingMessageId);
+                        return { ...c, messages: [...messagesWithoutThinking, { id: messageId!, sender, text, avatar }] };
+                    }));
                 } else {
                     setConversations(prev => prev.map(c => {
                         if (c.id !== activeConversationId) return c;
@@ -215,14 +232,14 @@ export const useConversations = (personas: Persona[], baseSystemPrompt: string) 
             
             let lastMsg = c.messages[c.messages.length-1];
             if(lastMsg && lastMsg.id === messageId) {
-                const fullText = lastMsg.text;
-                for (const persona of activePersonas) {
-                    const prefix = `${persona.name}:`;
-                    if (fullText.trim().startsWith(prefix)) {
-                        lastMsg.sender = persona.name;
-                        lastMsg.text = fullText.trim().substring(prefix.length).trim();
+                // 使用新的解析函数进行最终处理
+                const parsed = parsePersonaFromText(lastMsg.text, activePersonas);
+                if (parsed.personaName) {
+                    lastMsg.sender = parsed.personaName;
+                    lastMsg.text = parsed.cleanedText;
+                    const persona = activePersonas.find(p => p.name === parsed.personaName);
+                    if (persona) {
                         lastMsg.avatar = persona.avatar;
-                        break;
                     }
                 }
             }
@@ -230,17 +247,6 @@ export const useConversations = (personas: Persona[], baseSystemPrompt: string) 
             return c;
           });
 
-          const currentConv = finalConvos.find(c => c.id === activeConversationId);
-          if (currentConv) {
-             // Auto-generate title
-            if (currentConv.title === NEW_CONVERSATION_TITLE && currentConv.messages.length >= 2) {
-              getConversationTitle(currentConv.messages).then(title => {
-                if (title && title !== NEW_CONVERSATION_TITLE) {
-                  updateConversation(activeConversationId, { title });
-                }
-              });
-            }
-          }
           return finalConvos;
         });
 
@@ -257,15 +263,45 @@ export const useConversations = (personas: Persona[], baseSystemPrompt: string) 
         }
 
     } catch (error: any) {
+        // 移除"思考中"消息
+        setConversations(prev => prev.map(c => {
+            if (c.id !== activeConversationId) return c;
+            const messagesWithoutThinking = c.messages.filter(m => m.id !== thinkingMessageId);
+            return { ...c, messages: messagesWithoutThinking };
+        }));
+        
+        // 添加错误消息
         const errorMsg: ChatMessage = {
             id: `${Date.now()}-error`,
             sender: '系统',
             text: error.message || '发生错误，请重试。',
             avatar: { icon: '⚙️', bgColor: '#fee2e2', color: '#991b1b' },
         };
-        updateConversation(activeConversationId, { messages: [...currentMessages, errorMsg] });
+        
+        setConversations(prev => prev.map(c => {
+            if (c.id !== activeConversationId) return c;
+            const messagesWithoutThinking = c.messages.filter(m => m.id !== thinkingMessageId);
+            return { ...c, messages: [...messagesWithoutThinking, errorMsg] };
+        }));
     } finally {
         setIsLoading(false);
+        
+        // 在对话生成完成后,检查是否需要生成标题
+        // 要求:至少3条消息,且标题仍为默认标题
+        const currentConv = conversations.find(c => c.id === activeConversationId);
+        if (currentConv && 
+            currentConv.title === NEW_CONVERSATION_TITLE && 
+            currentConv.messages.length >= 3) {
+          // 使用前3条消息生成标题
+          const messagesToUse = currentConv.messages.slice(0, 3);
+          getConversationTitle(messagesToUse).then(title => {
+            if (title && title !== NEW_CONVERSATION_TITLE) {
+              updateConversation(activeConversationId, { title });
+            }
+          }).catch(err => {
+            console.error('Failed to generate title:', err);
+          });
+        }
     }
   }, [activeConversationId, conversations, personas, baseSystemPrompt, updateConversation]);
 

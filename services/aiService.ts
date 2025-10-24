@@ -3,6 +3,12 @@ import { streamText, generateText } from 'ai';
 import { Persona, ChatMessage, Conversation } from '../types/index';
 import { DEFAULT_SYSTEM_PROMPT } from "../constants/index";
 
+// 配置常量
+const STREAM_TIMEOUT_MS = 60000; // 60秒流式超时
+const CHUNK_TIMEOUT_MS = 10000; // 10秒单个chunk超时
+const MAX_RETRIES = 2; // 最大重试次数
+const RETRY_DELAY_MS = 1000; // 重试延迟
+
 let currentApiKey = '';
 let currentChatModel = 'qwen/qwen3-30b-a3b';
 let currentSummaryModel = 'qwen/qwen3-8b';
@@ -18,6 +24,74 @@ const getOpenRouter = () => {
     throw new Error('OpenRouter API Key 未设置。请在全局设置中配置。');
   }
   return createOpenRouter({ apiKey: currentApiKey });
+};
+
+// 工具函数：延迟
+const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+// 工具函数：带超时的Promise包装
+const withTimeout = <T>(promise: Promise<T>, timeoutMs: number, errorMessage: string): Promise<T> => {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) =>
+      setTimeout(() => reject(new Error(errorMessage)), timeoutMs)
+    ),
+  ]);
+};
+
+// 工具函数：解析人物名称（容错处理）
+export const parsePersonaFromText = (
+  text: string,
+  activePersonas: Persona[]
+): { personaName: string | null; cleanedText: string } => {
+  if (!text || !text.trim()) {
+    return { personaName: null, cleanedText: text };
+  }
+
+  const trimmedText = text.trim();
+  
+  // 尝试多种格式的匹配
+  const patterns = [
+    // 标准格式：人物名: 内容
+    /^([^:\n]+?):\s*(.*)$/s,
+    // 加粗格式：**人物名**: 内容
+    /^\*\*([^*:\n]+?)\*\*:\s*(.*)$/s,
+    // 加粗格式2：**人物名:**内容
+    /^\*\*([^*:\n]+?):\*\*\s*(.*)$/s,
+    // 中文冒号：人物名：内容
+    /^([^：\n]+?)：\s*(.*)$/s,
+  ];
+
+  for (const pattern of patterns) {
+    const match = trimmedText.match(pattern);
+    if (match) {
+      const potentialName = match[1].trim().replace(/\*\*/g, ''); // 移除可能的加粗符号
+      const content = match[2];
+      
+      // 检查是否是有效的人物名称
+      const persona = activePersonas.find(p => p.name === potentialName);
+      if (persona) {
+        return {
+          personaName: persona.name,
+          cleanedText: content.trim(),
+        };
+      }
+      
+      // 模糊匹配：处理可能的空格或大小写问题
+      const fuzzyPersona = activePersonas.find(p => 
+        p.name.replace(/\s/g, '') === potentialName.replace(/\s/g, '')
+      );
+      if (fuzzyPersona) {
+        return {
+          personaName: fuzzyPersona.name,
+          cleanedText: content.trim(),
+        };
+      }
+    }
+  }
+
+  // 如果没有匹配到任何格式，返回原文
+  return { personaName: null, cleanedText: trimmedText };
 };
 
 const formatConversationHistory = (messages: ChatMessage[], contextWindow: number): string => {
@@ -81,51 +155,140 @@ function constructPrompt(
   return finalPrompt;
 }
 
-// 将一次性文本结果包装为一个简单的异步可迭代流
-async function* singleChunkStream(text: string) {
-  if (text) {
-    yield text;
+// 带超时控制的流式迭代器
+async function* streamWithTimeout(
+  textStream: AsyncIterable<string>,
+  chunkTimeoutMs: number
+): AsyncIterable<string> {
+  const iterator = textStream[Symbol.asyncIterator]();
+  
+  while (true) {
+    try {
+      const result = await withTimeout(
+        iterator.next(),
+        chunkTimeoutMs,
+        `流式数据接收超时（${chunkTimeoutMs}ms内未收到数据）`
+      );
+      
+      if (result.done) {
+        break;
+      }
+      
+      if (result.value) {
+        yield result.value;
+      }
+    } catch (error) {
+      // 清理迭代器
+      if (iterator.return) {
+        await iterator.return();
+      }
+      throw error;
+    }
   }
 }
 
-// 包装流,在迭代时捕获类型校验错误并回退到非流式
+// 包装流，提供完整的错误处理和回退机制
 async function* wrapStreamWithFallback(
   textStream: AsyncIterable<string>,
   prompt: string,
   openrouter: ReturnType<typeof getOpenRouter>
 ): AsyncIterable<string> {
+  let hasYieldedAnyContent = false;
+  
   try {
-    for await (const chunk of textStream) {
-      yield chunk;
+    // 使用带超时的流迭代器
+    for await (const chunk of streamWithTimeout(textStream, CHUNK_TIMEOUT_MS)) {
+      if (chunk) {
+        hasYieldedAnyContent = true;
+        yield chunk;
+      }
     }
   } catch (error) {
-    console.error("Stream iteration error:", error);
+    console.error("流式处理错误:", error);
     const message = (error as any)?.message || '';
-    const isValidationOrTransformError =
+    
+    // 如果已经输出了部分内容，不要回退，直接抛出错误
+    if (hasYieldedAnyContent) {
+      console.warn('流式输出中断，已输出部分内容');
+      throw error;
+    }
+    
+    // 检查是否是可以回退的错误类型
+    const isRecoverableError =
       message.includes('Type validation failed') ||
       message.includes('Invalid input') ||
       message.includes('safeParseJSON') ||
-      message.includes('transform');
+      message.includes('transform') ||
+      message.includes('超时');
 
-    if (isValidationOrTransformError) {
-      console.warn('检测到流式数据类型校验错误,回退到非流式生成...');
+    if (isRecoverableError) {
+      console.warn('检测到可恢复错误，回退到非流式生成...');
       try {
-        const { text } = await generateText({
-          model: openrouter.chat(currentChatModel),
-          prompt,
-          temperature: 0.7,
-        });
-        yield text;
+        const { text } = await withTimeout(
+          generateText({
+            model: openrouter.chat(currentChatModel),
+            prompt,
+            temperature: 0.7,
+          }),
+          STREAM_TIMEOUT_MS,
+          '非流式生成超时'
+        );
+        
+        if (text) {
+          yield text;
+        }
         return;
       } catch (fallbackErr) {
-        console.error('Fallback generateText failed:', fallbackErr);
-        throw new Error('AI 服务回退失败,请稍后重试。');
+        console.error('回退生成失败:', fallbackErr);
+        throw new Error('AI 服务暂时不可用，请稍后重试。');
       }
     }
     
     throw error;
   }
 }
+
+// 带重试的流式请求
+const streamTextWithRetry = async (
+  openrouter: ReturnType<typeof getOpenRouter>,
+  prompt: string,
+  retries: number = MAX_RETRIES
+): Promise<AsyncIterable<string>> => {
+  let lastError: Error | null = null;
+  
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      if (attempt > 0) {
+        console.log(`重试第 ${attempt} 次...`);
+        await delay(RETRY_DELAY_MS * attempt); // 指数退避
+      }
+      
+      const result = await streamText({
+        model: openrouter.chat(currentChatModel),
+        prompt: prompt,
+        temperature: 0.7,
+      });
+      
+      return wrapStreamWithFallback(result.textStream, prompt, openrouter);
+    } catch (error) {
+      lastError = error as Error;
+      console.error(`尝试 ${attempt + 1} 失败:`, error);
+      
+      // 某些错误不应该重试
+      const message = (error as any)?.message || '';
+      if (message.includes('API Key') || message.includes('未设置')) {
+        throw error;
+      }
+      
+      // 最后一次尝试，不再重试
+      if (attempt === retries) {
+        break;
+      }
+    }
+  }
+  
+  throw lastError || new Error('AI 服务请求失败');
+};
 
 export const getAiResponseStream = async (
   conversation: Conversation,
@@ -145,17 +308,16 @@ export const getAiResponseStream = async (
   const openrouter = getOpenRouter();
 
   try {
-    const result = await streamText({
-      model: openrouter.chat(currentChatModel),
-      prompt: prompt,
-      temperature: 0.7,
-    });
-
-    // 包装流以捕获迭代时的错误
-    return wrapStreamWithFallback(result.textStream, prompt, openrouter);
+    return await streamTextWithRetry(openrouter, prompt);
   } catch (error) {
-    console.error("Error calling OpenRouter API:", error);
-    throw new Error('调用AI服务时出错,请检查API密钥或稍后再试。');
+    console.error("调用 AI 服务失败:", error);
+    const message = (error as any)?.message || '';
+    
+    if (message.includes('API Key') || message.includes('未设置')) {
+      throw error;
+    }
+    
+    throw new Error('AI 服务暂时不可用，请稍后重试。');
   }
 };
 
