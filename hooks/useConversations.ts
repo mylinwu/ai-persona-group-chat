@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 // fix: Corrected import path to resolve module.
 import { Persona, Conversation, ChatMessage } from '../types/index';
-import { getAiResponseStream, parsePersonaFromText } from '../services/aiService';
+import { getAiResponseStream, getAiResponseStreamForPersona, parsePersonaFromText, extractMentionedPersonas } from '../services/aiService';
 import { getConversationTitle, summarizeMessageIfNeeded } from '../services/conversationManager';
 // fix: Corrected import path to resolve module.
 import { CONVERSATION_DIRECTIONS, NEW_CONVERSATION_TITLE, DEFAULT_CONTEXT_WINDOW } from '../constants/index';
@@ -154,119 +154,258 @@ export const useConversations = (personas: Persona[], baseSystemPrompt: string) 
         });
     }
 
-    const mentionMatch = trimmedMessage?.match(/@(\S+)/);
-    let finalNextSpeaker = nextSpeaker;
+    // 提取所有被 @ 的角色
     const activePersonas = personas.filter(p => conv.activePersonaIds.includes(p.id));
-
-    if (mentionMatch) {
-      const mentionedName = mentionMatch[1];
-      const mentionedPersona = activePersonas.find(p => p.name === mentionedName);
-      if (mentionedPersona) {
-        finalNextSpeaker = mentionedPersona.name;
-      }
+    const mentionedPersonas = trimmedMessage ? extractMentionedPersonas(trimmedMessage, activePersonas) : [];
+    
+    // 如果有多个 @ 提及，使用多角色模式
+    const isMultiPersonaMode = mentionedPersonas.length > 1;
+    let finalNextSpeaker = nextSpeaker;
+    
+    // 单个 @ 的情况，保持原有逻辑
+    if (mentionedPersonas.length === 1) {
+      finalNextSpeaker = mentionedPersonas[0].name;
     }
 
-    // 立即添加"思考中"占位消息，提供即时反馈
-    const thinkingMessageId = `${Date.now()}-thinking`;
-    const thinkingMessage: ChatMessage = {
+    // 立即添加“思考中”占位消息
+    const thinkingMessageIds: string[] = [];
+    
+    if (isMultiPersonaMode) {
+      // 多角色模式：为每个被 @ 的角色添加思考中消息
+      mentionedPersonas.forEach((persona, index) => {
+        const thinkingMessageId = `${Date.now()}-thinking-${index}`;
+        thinkingMessageIds.push(thinkingMessageId);
+        const thinkingMessage: ChatMessage = {
+          id: thinkingMessageId,
+          sender: persona.name,
+          text: '思考中...',
+          avatar: persona.avatar
+        };
+        currentMessages.push(thinkingMessage);
+      });
+    } else {
+      // 单角色模式：原有逻辑
+      const thinkingMessageId = `${Date.now()}-thinking`;
+      thinkingMessageIds.push(thinkingMessageId);
+      const thinkingMessage: ChatMessage = {
         id: thinkingMessageId,
         sender: 'AI',
         text: '思考中...',
         avatar: { icon: '💭', bgColor: '#f1f5f9', color: '#64748b' }
-    };
-    currentMessages.push(thinkingMessage);
+      };
+      currentMessages.push(thinkingMessage);
+    }
+    
     updateConversation(activeConversationId, { messages: currentMessages });
 
     try {
         const updatedConv = { ...conv, messages: currentMessages };
 
-        const stream = await getAiResponseStream(
-            updatedConv,
-            activePersonas,
-            baseSystemPrompt,
-            finalNextSpeaker
-        );
-
-        let messageId: string | null = null;
-        let aiMessageText = '';
-        
-        for await (const chunkText of stream) {
-            if (chunkText) {
-                aiMessageText += chunkText;
-                if (!messageId) {
-                    messageId = `${Date.now()}-ai`;
-                    
+        if (isMultiPersonaMode) {
+          // 多角色模式：并行生成多个回答
+          const responsePromises = mentionedPersonas.map(async (persona, index) => {
+            const thinkingMessageId = thinkingMessageIds[index];
+            const messageId = `${Date.now()}-ai-${index}-${persona.name}`;
+            let aiMessageText = '';
+            
+            try {
+              const stream = await getAiResponseStreamForPersona(
+                updatedConv,
+                activePersonas,
+                baseSystemPrompt,
+                persona.name
+              );
+              
+              let isFirstChunk = true;
+              
+              for await (const chunkText of stream) {
+                if (chunkText) {
+                  aiMessageText += chunkText;
+                  
+                  if (isFirstChunk) {
+                    isFirstChunk = false;
                     // 使用新的解析函数
                     const parsed = parsePersonaFromText(aiMessageText, activePersonas);
-                    const sender = parsed.personaName || 'AI';
-                    const avatar = parsed.personaName 
-                        ? activePersonas.find(p => p.name === parsed.personaName)?.avatar || { icon: '⏳', bgColor: '#f1f5f9', color: '#475569' }
-                        : { icon: '⏳', bgColor: '#f1f5f9', color: '#475569' };
                     const text = parsed.cleanedText || aiMessageText;
+                    
+                    // 替换思考中消息
+                    setConversations(prev => prev.map(c => {
+                      if (c.id !== activeConversationId) return c;
+                      const messagesWithoutThinking = c.messages.filter(m => m.id !== thinkingMessageId);
+                      return { 
+                        ...c, 
+                        messages: [...messagesWithoutThinking, { 
+                          id: messageId, 
+                          sender: persona.name, 
+                          text, 
+                          avatar: persona.avatar 
+                        }] 
+                      };
+                    }));
+                  } else {
+                    // 更新消息内容
+                    setConversations(prev => prev.map(c => {
+                      if (c.id !== activeConversationId) return c;
+                      const msgIndex = c.messages.findIndex(m => m.id === messageId);
+                      if (msgIndex === -1) return c;
+                      
+                      const updatedMessages = [...c.messages];
+                      const parsed = parsePersonaFromText(aiMessageText, activePersonas);
+                      updatedMessages[msgIndex] = {
+                        ...updatedMessages[msgIndex],
+                        text: parsed.cleanedText || aiMessageText
+                      };
+                      return { ...c, messages: updatedMessages };
+                    }));
+                  }
+                }
+              }
+              
+              // 最终处理
+              setConversations(prev => prev.map(c => {
+                if (c.id !== activeConversationId) return c;
+                const msgIndex = c.messages.findIndex(m => m.id === messageId);
+                if (msgIndex === -1) return c;
+                
+                const updatedMessages = [...c.messages];
+                const parsed = parsePersonaFromText(aiMessageText, activePersonas);
+                updatedMessages[msgIndex] = {
+                  ...updatedMessages[msgIndex],
+                  text: parsed.cleanedText || aiMessageText
+                };
+                return { ...c, messages: updatedMessages };
+              }));
+              
+              // 后台总结
+              const finalMessage = { 
+                id: messageId, 
+                sender: persona.name, 
+                text: aiMessageText, 
+                avatar: persona.avatar 
+              };
+              summarizeMessageIfNeeded(finalMessage).then(summary => {
+                if (summary) {
+                  setConversations(prev => prev.map(c => {
+                    if (c.id !== activeConversationId) return c;
+                    return { 
+                      ...c, 
+                      messages: c.messages.map(m => m.id === messageId ? { ...m, summary } : m) 
+                    };
+                  }));
+                }
+              });
+              
+            } catch (error) {
+              console.error(`角色 ${persona.name} 生成失败:`, error);
+              // 移除思考中消息，添加错误消息
+              setConversations(prev => prev.map(c => {
+                if (c.id !== activeConversationId) return c;
+                const messagesWithoutThinking = c.messages.filter(m => m.id !== thinkingMessageId);
+                const errorMsg: ChatMessage = {
+                  id: `${Date.now()}-error-${persona.name}`,
+                  sender: persona.name,
+                  text: `生成失败：${(error as any)?.message || '未知错误'}`,
+                  avatar: persona.avatar,
+                };
+                return { ...c, messages: [...messagesWithoutThinking, errorMsg] };
+              }));
+            }
+          });
+          
+          // 等待所有角色回答完成
+          await Promise.all(responsePromises);
+          
+        } else {
+          // 单角色模式：原有逻辑
+          const thinkingMessageId = thinkingMessageIds[0];
+          const stream = await getAiResponseStream(
+              updatedConv,
+              activePersonas,
+              baseSystemPrompt,
+              finalNextSpeaker
+          );
 
-                    // 替换"思考中"消息为实际 AI 回复
-                    setConversations(prev => prev.map(c => {
-                        if (c.id !== activeConversationId) return c;
-                        const messagesWithoutThinking = c.messages.filter(m => m.id !== thinkingMessageId);
-                        return { ...c, messages: [...messagesWithoutThinking, { id: messageId!, sender, text, avatar }] };
-                    }));
-                } else {
-                    setConversations(prev => prev.map(c => {
-                        if (c.id !== activeConversationId) return c;
-                        const lastMsg = c.messages[c.messages.length - 1];
-                        if (lastMsg?.id === messageId) {
-                             const fullText = lastMsg.text + chunkText;
-                             return { ...c, messages: [...c.messages.slice(0, -1), { ...lastMsg, text: fullText }] };
-                        }
-                        return c;
-                    }));
-                }
-            }
-        }
-        
-        // Final processing to correct speaker name, generate title, and summarize
-        let finalAiMessage: ChatMessage | null = null;
-        setConversations(prev => {
-          const finalConvos = prev.map(c => {
-            if (c.id !== activeConversationId) return c;
-            
-            let lastMsg = c.messages[c.messages.length-1];
-            if(lastMsg && lastMsg.id === messageId) {
-                // 使用新的解析函数进行最终处理
-                const parsed = parsePersonaFromText(lastMsg.text, activePersonas);
-                if (parsed.personaName) {
-                    lastMsg.sender = parsed.personaName;
-                    lastMsg.text = parsed.cleanedText;
-                    const persona = activePersonas.find(p => p.name === parsed.personaName);
-                    if (persona) {
-                        lastMsg.avatar = persona.avatar;
-                    }
-                }
-            }
-            finalAiMessage = lastMsg;
-            return c;
+          let messageId: string | null = null;
+          let aiMessageText = '';
+          
+          for await (const chunkText of stream) {
+              if (chunkText) {
+                  aiMessageText += chunkText;
+                  if (!messageId) {
+                      messageId = `${Date.now()}-ai`;
+                      
+                      // 使用新的解析函数
+                      const parsed = parsePersonaFromText(aiMessageText, activePersonas);
+                      const sender = parsed.personaName || 'AI';
+                      const avatar = parsed.personaName 
+                          ? activePersonas.find(p => p.name === parsed.personaName)?.avatar || { icon: '⏳', bgColor: '#f1f5f9', color: '#475569' }
+                          : { icon: '⏳', bgColor: '#f1f5f9', color: '#475569' };
+                      const text = parsed.cleanedText || aiMessageText;
+
+                      // 替换“思考中”消息为实际 AI 回复
+                      setConversations(prev => prev.map(c => {
+                          if (c.id !== activeConversationId) return c;
+                          const messagesWithoutThinking = c.messages.filter(m => m.id !== thinkingMessageId);
+                          return { ...c, messages: [...messagesWithoutThinking, { id: messageId!, sender, text, avatar }] };
+                      }));
+                  } else {
+                      setConversations(prev => prev.map(c => {
+                          if (c.id !== activeConversationId) return c;
+                          const lastMsg = c.messages[c.messages.length - 1];
+                          if (lastMsg?.id === messageId) {
+                               const fullText = lastMsg.text + chunkText;
+                               return { ...c, messages: [...c.messages.slice(0, -1), { ...lastMsg, text: fullText }] };
+                          }
+                          return c;
+                      }));
+                  }
+              }
+          }
+          
+          // Final processing to correct speaker name, generate title, and summarize
+          let finalAiMessage: ChatMessage | null = null;
+          setConversations(prev => {
+            const finalConvos = prev.map(c => {
+              if (c.id !== activeConversationId) return c;
+              
+              let lastMsg = c.messages[c.messages.length-1];
+              if(lastMsg && lastMsg.id === messageId) {
+                  // 使用新的解析函数进行最终处理
+                  const parsed = parsePersonaFromText(lastMsg.text, activePersonas);
+                  if (parsed.personaName) {
+                      lastMsg.sender = parsed.personaName;
+                      lastMsg.text = parsed.cleanedText;
+                      const persona = activePersonas.find(p => p.name === parsed.personaName);
+                      if (persona) {
+                          lastMsg.avatar = persona.avatar;
+                      }
+                  }
+              }
+              finalAiMessage = lastMsg;
+              return c;
+            });
+
+            return finalConvos;
           });
 
-          return finalConvos;
-        });
-
-        // Background summarization for AI message
-        if (finalAiMessage) {
-            summarizeMessageIfNeeded(finalAiMessage).then(summary => {
-                if (summary && finalAiMessage?.id) {
-                     setConversations(prev => prev.map(c => {
-                        if (c.id !== activeConversationId) return c;
-                        return { ...c, messages: c.messages.map(m => m.id === finalAiMessage!.id ? { ...m, summary } : m) };
-                    }));
-                }
-            });
+          // Background summarization for AI message
+          if (finalAiMessage) {
+              summarizeMessageIfNeeded(finalAiMessage).then(summary => {
+                  if (summary && finalAiMessage?.id) {
+                       setConversations(prev => prev.map(c => {
+                          if (c.id !== activeConversationId) return c;
+                          return { ...c, messages: c.messages.map(m => m.id === finalAiMessage!.id ? { ...m, summary } : m) };
+                      }));
+                  }
+              });
+          }
         }
 
     } catch (error: any) {
-        // 移除"思考中"消息
+        // 移除所有“思考中”消息
         setConversations(prev => prev.map(c => {
             if (c.id !== activeConversationId) return c;
-            const messagesWithoutThinking = c.messages.filter(m => m.id !== thinkingMessageId);
+            const messagesWithoutThinking = c.messages.filter(m => !thinkingMessageIds.includes(m.id));
             return { ...c, messages: messagesWithoutThinking };
         }));
         
@@ -280,12 +419,18 @@ export const useConversations = (personas: Persona[], baseSystemPrompt: string) 
         
         setConversations(prev => prev.map(c => {
             if (c.id !== activeConversationId) return c;
-            const messagesWithoutThinking = c.messages.filter(m => m.id !== thinkingMessageId);
+            const messagesWithoutThinking = c.messages.filter(m => !thinkingMessageIds.includes(m.id));
             return { ...c, messages: [...messagesWithoutThinking, errorMsg] };
         }));
     } finally {
         setIsLoading(false);
         
+        // 确保所有思考中消息都被清理
+        setConversations(prev => prev.map(c => {
+            if (c.id !== activeConversationId) return c;
+            const messagesWithoutThinking = c.messages.filter(m => !thinkingMessageIds.includes(m.id));
+            return { ...c, messages: messagesWithoutThinking };
+        }));
         // 在对话生成完成后,检查是否需要生成标题
         // 要求:至少3条消息,且标题仍为默认标题
         const currentConv = conversations.find(c => c.id === activeConversationId);

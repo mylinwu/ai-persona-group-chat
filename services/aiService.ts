@@ -39,6 +39,45 @@ const withTimeout = <T>(promise: Promise<T>, timeoutMs: number, errorMessage: st
   ]);
 };
 
+// 工具函数：从用户输入中提取所有 @ 提及的角色名
+export const extractMentionedPersonas = (
+  text: string,
+  activePersonas: Persona[]
+): Persona[] => {
+  if (!text || !text.trim()) {
+    return [];
+  }
+
+  // 匹配所有 @角色名 格式（支持中英文、数字、下划线）
+  const mentionPattern = /@([\u4e00-\u9fa5a-zA-Z0-9_]+)/g;
+  const matches = text.matchAll(mentionPattern);
+  const mentionedPersonas: Persona[] = [];
+  const seenNames = new Set<string>();
+
+  for (const match of matches) {
+    const mentionedName = match[1];
+    
+    // 精确匹配
+    const persona = activePersonas.find(p => p.name === mentionedName);
+    if (persona && !seenNames.has(persona.name)) {
+      mentionedPersonas.push(persona);
+      seenNames.add(persona.name);
+      continue;
+    }
+    
+    // 模糊匹配（忽略空格）
+    const fuzzyPersona = activePersonas.find(p => 
+      p.name.replace(/\s/g, '') === mentionedName.replace(/\s/g, '')
+    );
+    if (fuzzyPersona && !seenNames.has(fuzzyPersona.name)) {
+      mentionedPersonas.push(fuzzyPersona);
+      seenNames.add(fuzzyPersona.name);
+    }
+  }
+
+  return mentionedPersonas;
+};
+
 // 工具函数：解析人物名称（容错处理）
 export const parsePersonaFromText = (
   text: string,
@@ -288,6 +327,38 @@ const streamTextWithRetry = async (
   }
   
   throw lastError || new Error('AI 服务请求失败');
+};
+
+// 为单个指定角色生成回答流
+export const getAiResponseStreamForPersona = async (
+  conversation: Conversation,
+  activePersonas: Persona[],
+  baseSystemPrompt: string,
+  personaName: string
+) => {
+  if (!currentApiKey) {
+    throw new Error('OpenRouter API Key 未设置。请在全局设置中配置。');
+  }
+  
+  if (activePersonas.length === 0) {
+    throw new Error('错误：没有活跃的人设参与群聊。请在设置中至少选择一位。');
+  }
+  
+  const prompt = constructPrompt(conversation, activePersonas, baseSystemPrompt, personaName);
+  const openrouter = getOpenRouter();
+
+  try {
+    return await streamTextWithRetry(openrouter, prompt);
+  } catch (error) {
+    console.error("调用 AI 服务失败:", error);
+    const message = (error as any)?.message || '';
+    
+    if (message.includes('API Key') || message.includes('未设置')) {
+      throw error;
+    }
+    
+    throw new Error('AI 服务暂时不可用，请稍后重试。');
+  }
 };
 
 export const getAiResponseStream = async (

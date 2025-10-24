@@ -130,7 +130,7 @@ const ChatView: React.FC<ChatViewProps> = ({ conversation, personas, isStretched
           {messages.map((msg) => (
             <div key={msg.id} className={`flex items-start gap-3 ${msg.sender === 'user' ? 'justify-end' : ''}`}>
               {msg.sender !== 'user' && <PersonaAvatar src={msg.avatar} name={msg.sender} />}
-              <div className={`flex flex-col ${isStretched ? 'max-w-4xl' : 'max-w-2xl'} ${msg.sender === 'user' ? 'items-end' : 'items-start'}`}>
+              <div className={`flex flex-col ${isStretched ? 'max-w-8xl' : 'max-w-2xl'} ${msg.sender === 'user' ? 'items-end' : 'items-start'}`}>
                 {msg.sender !== 'user' && <p className="text-sm font-semibold text-gray-600 mb-1">{msg.sender}</p>}
                 <div 
                   className={`px-4 py-2 rounded-2xl ${msg.sender === 'user' ? 'bg-blue-500 text-white rounded-br-none' : 'bg-gray-100 text-gray-800 rounded-bl-none border border-gray-200'}`}
@@ -224,7 +224,7 @@ const ChatView: React.FC<ChatViewProps> = ({ conversation, personas, isStretched
               value={chatInput.input}
               onChange={chatInput.handleInputChange}
               onKeyDown={handleKeyDown}
-              placeholder={activePersonas.length > 0 ? `输入消息，或 @${activePersonas[0].name} 或 #${CONVERSATION_DIRECTIONS[1]}...` : "请先在设置中添加人设"}
+              placeholder={activePersonas.length > 0 ? `输入消息，可以 @${activePersonas[0].name}${activePersonas.length > 1 ? ` @${activePersonas[1].name}` : ''} 或 #${CONVERSATION_DIRECTIONS[1]}...` : "请先在设置中添加人设"}
               disabled={isLoading || activePersonas.length === 0}
               className="w-full bg-transparent focus:outline-none text-gray-800 placeholder-gray-400 px-2"
               autoComplete="off"
