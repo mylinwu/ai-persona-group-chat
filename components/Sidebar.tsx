@@ -76,6 +76,9 @@ const ConversationItem: React.FC<Omit<SidebarProps, 'isOpen' | 'setIsOpen' | 'co
           onBlur={handleSave}
           onKeyDown={handleKeyDown}
           className={`flex-1 bg-transparent focus:outline-none ring-1 ${isActive ? 'ring-white/50' : 'ring-black/30'} rounded px-1 min-w-0`}
+          autoComplete="off"
+          spellCheck={false}
+          autoCapitalize="none"
         />
       ) : (
         <span className="flex-1 truncate text-sm font-medium">{conversation.title}</span>

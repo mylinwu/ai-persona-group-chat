@@ -34,6 +34,9 @@ const AvatarEditor: React.FC<{
                 }}
                 placeholder="😀"
                 className="w-full bg-gray-50 border border-gray-300 rounded-md px-3 py-2 text-lg text-center focus:outline-none focus:ring-2 focus:ring-blue-500"
+                autoComplete="off"
+                spellCheck={false}
+                autoCapitalize="none"
               />
             <div className="grid grid-cols-6 sm:grid-cols-9 gap-2">
               {PRESET_ICONS.map(icon => (
@@ -82,13 +85,13 @@ const PersonaCard: React.FC<{
   if (isEditing) {
     return (
       <div className="bg-white rounded-lg p-4 flex flex-col gap-4 border border-blue-500 shadow-md">
-        <input name="name" value={editedPersona.name} onChange={handleChange} className="text-lg font-bold bg-gray-100 w-full p-2 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900" />
+        <input name="name" value={editedPersona.name} onChange={handleChange} className="text-lg font-bold bg-gray-100 w-full p-2 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900" autoComplete="off" spellCheck={false} autoCapitalize="none" />
         
         <AvatarEditor value={editedPersona.avatar} onChange={avatar => setEditedPersona({...editedPersona, avatar})} />
 
         <div>
           <label className="text-sm font-medium text-gray-500">人设提示词 (可选)</label>
-          <textarea name="prompt" value={editedPersona.prompt} onChange={handleChange} rows={5} className="mt-1 bg-gray-100 w-full p-2 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm text-gray-900" />
+          <textarea name="prompt" value={editedPersona.prompt} onChange={handleChange} rows={5} className="mt-1 bg-gray-100 w-full p-2 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm text-gray-900" autoComplete="off" spellCheck={false} />
         </div>
         <div className="flex justify-end gap-2">
           <button onClick={handleCancel} className="p-2 bg-gray-200 hover:bg-gray-300 rounded-md text-gray-800"><XMarkIcon className="h-5 w-5"/></button>
@@ -190,7 +193,7 @@ const PersonaManagementView: React.FC<PersonaManagementViewProps> = ({
         <div className="flex flex-wrap justify-between items-center gap-4 mb-6">
           <h2 className="text-2xl font-bold text-gray-900">人设管理</h2>
           <div className="flex flex-wrap items-center gap-2">
-            <input type="file" accept=".json" ref={fileInputRef} onChange={handleFileChange} className="hidden" />
+            <input type="file" accept=".json" ref={fileInputRef} onChange={handleFileChange} className="hidden" autoComplete="off" />
             <button onClick={() => fileInputRef.current?.click()} className="flex items-center gap-2 bg-white hover:bg-gray-100 text-gray-800 font-bold py-2 px-4 rounded-lg transition-colors shadow-sm border border-gray-300">
               <ArrowUpTrayIcon className="h-5 w-5"/> 导入
             </button>
@@ -204,11 +207,11 @@ const PersonaManagementView: React.FC<PersonaManagementViewProps> = ({
         {isAdding && (
           <div className="bg-white rounded-lg p-4 mb-6 flex flex-col gap-4 border border-blue-500 shadow-md">
             <h3 className="text-lg font-bold text-gray-900">添加新人设</h3>
-            <input name="name" value={newPersona.name} onChange={(e) => setNewPersona({...newPersona, name: e.target.value})} placeholder="名称 (必填)" className="bg-gray-100 w-full p-2 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            <input name="name" value={newPersona.name} onChange={(e) => setNewPersona({...newPersona, name: e.target.value})} placeholder="名称 (必填)" className="bg-gray-100 w-full p-2 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500" autoComplete="off" spellCheck={false} autoCapitalize="none" />
             
             <AvatarEditor value={newPersona.avatar} onChange={avatar => setNewPersona({...newPersona, avatar})} />
 
-            <textarea name="prompt" value={newPersona.prompt} onChange={(e) => setNewPersona({...newPersona, prompt: e.target.value})} placeholder="人设提示词 (可选)" rows={4} className="bg-gray-100 w-full p-2 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            <textarea name="prompt" value={newPersona.prompt} onChange={(e) => setNewPersona({...newPersona, prompt: e.target.value})} placeholder="人设提示词 (可选)" rows={4} className="bg-gray-100 w-full p-2 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500" autoComplete="off" spellCheck={false} />
             <div className="flex justify-end gap-2">
               <button onClick={() => setIsAdding(false)} className="bg-gray-200 hover:bg-gray-300 text-gray-800 py-2 px-4 rounded-lg">取消</button>
               <button onClick={handleAdd} disabled={!newPersona.name.trim()} className="bg-green-500 hover:bg-green-600 text-white py-2 px-4 rounded-lg disabled:bg-green-300 disabled:cursor-not-allowed">保存</button>

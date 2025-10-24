@@ -1,32 +1,24 @@
 import { useState, useEffect, useCallback } from 'react';
 // fix: Corrected import path to resolve module.
 import { Persona, Conversation, ChatMessage } from '../types/index';
-import { getAiResponseStream } from '../services/geminiService';
+import { getAiResponseStream } from '../services/aiService';
 import { getConversationTitle, summarizeMessageIfNeeded } from '../services/conversationManager';
 // fix: Corrected import path to resolve module.
 import { CONVERSATION_DIRECTIONS, NEW_CONVERSATION_TITLE, DEFAULT_CONTEXT_WINDOW } from '../constants/index';
-
-const CONVERSATIONS_STORAGE_KEY = 'ai-persona-chat-conversations';
-const ACTIVE_CONV_ID_STORAGE_KEY = 'ai-persona-chat-active-id';
+import { db } from '../utils/db';
 
 export const useConversations = (personas: Persona[], baseSystemPrompt: string) => {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
 
+  // 初始化:从数据库加载会话
   useEffect(() => {
     try {
-      const stored = window.localStorage.getItem(CONVERSATIONS_STORAGE_KEY);
-      const storedConvos = stored ? JSON.parse(stored) : [];
-      
-      const migratedConvos = storedConvos.map((convo: any) => ({
-          ...convo,
-          thinkingMode: convo.thinkingMode ?? true,
-          contextWindow: convo.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
-      }));
+      const storedConvos = db.getConversations();
 
-      if (migratedConvos.length === 0) {
-        // No conversations exist, so create a new one to start.
+      if (storedConvos.length === 0) {
+        // 没有会话存在,创建一个新的
         const newConversation: Conversation = {
           id: new Date().toISOString(),
           title: NEW_CONVERSATION_TITLE,
@@ -40,19 +32,22 @@ export const useConversations = (personas: Persona[], baseSystemPrompt: string) 
         };
         setConversations([newConversation]);
         setActiveConversationId(newConversation.id);
+        db.saveConversations([newConversation]);
+        db.saveActiveConversationId(newConversation.id);
       } else {
-        setConversations(migratedConvos);
-        const storedActiveId = window.localStorage.getItem(ACTIVE_CONV_ID_STORAGE_KEY);
-        // Set active conversation to the stored one, or fallback to the first one.
-        if (storedActiveId && migratedConvos.some((c: Conversation) => c.id === storedActiveId)) {
+        setConversations(storedConvos);
+        const storedActiveId = db.getActiveConversationId();
+        // 设置激活的会话,如果存储的 ID 有效则使用,否则使用第一个
+        if (storedActiveId && storedConvos.some((c: Conversation) => c.id === storedActiveId)) {
           setActiveConversationId(storedActiveId);
         } else {
-          setActiveConversationId(migratedConvos[0].id);
+          setActiveConversationId(storedConvos[0].id);
+          db.saveActiveConversationId(storedConvos[0].id);
         }
       }
     } catch (error) {
-      console.error('Error reading from localStorage, starting with a fresh conversation.', error);
-      // If storage is corrupted or fails, start with a single fresh conversation.
+      console.error('Error loading conversations from database, starting with a fresh conversation.', error);
+      // 如果存储损坏或失败,创建一个新会话
       const newConversation: Conversation = {
         id: new Date().toISOString(),
         title: NEW_CONVERSATION_TITLE,
@@ -69,17 +64,10 @@ export const useConversations = (personas: Persona[], baseSystemPrompt: string) 
     }
   }, []);
 
+  // 自动保存:会话或激活 ID 变化时保存到数据库
   useEffect(() => {
-    try {
-      window.localStorage.setItem(CONVERSATIONS_STORAGE_KEY, JSON.stringify(conversations));
-      if (activeConversationId) {
-        window.localStorage.setItem(ACTIVE_CONV_ID_STORAGE_KEY, activeConversationId);
-      } else {
-        window.localStorage.removeItem(ACTIVE_CONV_ID_STORAGE_KEY);
-      }
-    } catch (error) {
-      console.error('Error writing to localStorage', error);
-    }
+    db.saveConversations(conversations);
+    db.saveActiveConversationId(activeConversationId);
   }, [conversations, activeConversationId]);
   
   const addConversation = () => {
@@ -111,6 +99,7 @@ export const useConversations = (personas: Persona[], baseSystemPrompt: string) 
 
   const clearAllConversations = () => {
     if (window.confirm('您确定要删除所有会话吗？此操作无法撤销。')) {
+      db.clearAllConversations();
       setConversations([]);
       setActiveConversationId(null);
     }
@@ -183,8 +172,7 @@ export const useConversations = (personas: Persona[], baseSystemPrompt: string) 
         let messageId: string | null = null;
         let aiMessageText = '';
         
-        for await (const chunk of stream) {
-            const chunkText = chunk.text;
+        for await (const chunkText of stream) {
             if (chunkText) {
                 aiMessageText += chunkText;
                 if (!messageId) {

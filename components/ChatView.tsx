@@ -10,6 +10,7 @@ import ConversationSettingsModal from './ConversationSettingsModal';
 import { useChatInput } from '../hooks/useChatInput';
 import { formatShortcut } from '../utils/shortcutFormatter';
 import { ArrowUpIcon, SparklesIcon, Cog6ToothIcon, ChevronDownIcon } from './icons/Icons';
+import { AppSettings } from '../hooks/useAppSettings';
 
 interface ChatViewProps {
   conversation: Conversation | undefined;
@@ -21,9 +22,10 @@ interface ChatViewProps {
   aiContinueShortcut: string;
   fontFamily: string;
   fontSize: number;
+  settings: AppSettings;
 }
 
-const ChatView: React.FC<ChatViewProps> = ({ conversation, personas, isStretched, isLoading, onSendMessage, onUpdateConversation, aiContinueShortcut, fontFamily, fontSize }) => {
+const ChatView: React.FC<ChatViewProps> = ({ conversation, personas, isStretched, isLoading, onSendMessage, onUpdateConversation, aiContinueShortcut, fontFamily, fontSize, settings }) => {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isDirectionDropdownOpen, setIsDirectionDropdownOpen] = useState(false);
   
@@ -132,7 +134,7 @@ const ChatView: React.FC<ChatViewProps> = ({ conversation, personas, isStretched
                 {msg.sender !== 'user' && <p className="text-sm font-semibold text-gray-600 mb-1">{msg.sender}</p>}
                 <div 
                   className={`px-4 py-2 rounded-2xl ${msg.sender === 'user' ? 'bg-blue-500 text-white rounded-br-none' : 'bg-gray-100 text-gray-800 rounded-bl-none border border-gray-200'}`}
-                  style={{ fontFamily: fontFamily, fontSize: `${fontSize}px` }}
+                  style={{ fontFamily: fontFamily, fontSize: `${fontSize}px`, lineHeight: settings.lineHeight }}
                 >
                   <ReactMarkdown remarkPlugins={[remarkGfm]} components={MarkdownComponents}>
                     {msg.text}
@@ -240,6 +242,7 @@ const ChatView: React.FC<ChatViewProps> = ({ conversation, personas, isStretched
         conversation={conversation}
         personas={personas}
         onUpdateConversation={onUpdateConversation}
+        settings={settings}
       />
     </div>
   );

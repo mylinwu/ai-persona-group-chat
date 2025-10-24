@@ -1,5 +1,5 @@
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import ChatView from './components/ChatView';
 import PersonaManagementView from './components/PersonaManagementView';
 import GlobalSettings from './components/GlobalSettings';
@@ -9,6 +9,7 @@ import { usePersonas } from './hooks/usePersonas';
 import { useAppSettings } from './hooks/useAppSettings';
 import { useConversations } from './hooks/useConversations';
 import { useGlobalShortcuts } from './hooks/useGlobalShortcuts';
+import { initializeAIService } from './services/aiService';
 
 export type View = 'chat' | 'personas';
 
@@ -21,6 +22,11 @@ const App: React.FC = () => {
   const [isSidebarOpen, setIsSidebarOpen] = useState(() => window.innerWidth >= 768);
 
   const activeConversation = conversationsHook.conversations.find(c => c.id === conversationsHook.activeConversationId);
+
+  // 初始化 AI 服务
+  useEffect(() => {
+    initializeAIService(settings.openRouterApiKey, settings.chatModel, settings.summaryModel);
+  }, [settings.openRouterApiKey, settings.chatModel, settings.summaryModel]);
 
   useGlobalShortcuts([
     {
@@ -65,6 +71,7 @@ const App: React.FC = () => {
               onUpdateConversation={conversationsHook.updateConversationDetails}
               isLoading={conversationsHook.isLoading}
               aiContinueShortcut={settings.aiContinueShortcut}
+              settings={settings}
             />
           ) : (
             <PersonaManagementView {...personasHook} />

@@ -3,6 +3,7 @@ import React from 'react';
 import { Conversation, Persona } from '../types/index';
 import PersonaAvatar from './PersonaAvatar';
 import { XMarkIcon } from './icons/Icons';
+import { AppSettings } from '../hooks/useAppSettings';
 
 interface ConversationSettingsModalProps {
     isOpen: boolean;
@@ -10,9 +11,10 @@ interface ConversationSettingsModalProps {
     conversation: Conversation;
     personas: Persona[];
     onUpdateConversation: (id: string, details: Partial<Pick<Conversation, 'activePersonaIds' | 'thinkingMode' | 'contextWindow'>>) => void;
+    settings: AppSettings;
 }
 
-const ConversationSettingsModal: React.FC<ConversationSettingsModalProps> = ({ isOpen, onClose, conversation, personas, onUpdateConversation }) => {
+const ConversationSettingsModal: React.FC<ConversationSettingsModalProps> = ({ isOpen, onClose, conversation, personas, onUpdateConversation, settings }) => {
     if (!isOpen) return null;
 
     const togglePersonaInChat = (personaId: string) => {
@@ -26,6 +28,11 @@ const ConversationSettingsModal: React.FC<ConversationSettingsModalProps> = ({ i
     };
 
     const activePersonasCount = conversation.activePersonaIds.length;
+    
+    // 检测当前对话模型是否支持思考模式
+    const chatModelSupportsThinking = settings.chatModel.includes('thinking') || 
+                                      settings.chatModel.includes('o1') || 
+                                      settings.chatModel.includes('o3');
 
     return (
         <div className="fixed inset-0 bg-black/50 z-30 flex items-center justify-center" onClick={onClose}>
@@ -58,18 +65,23 @@ const ConversationSettingsModal: React.FC<ConversationSettingsModalProps> = ({ i
                     <h3 className="text-lg font-semibold text-gray-800 mb-2">高级设置</h3>
                     <div className="bg-gray-100 p-3 rounded-md space-y-3">
                         <div className="flex items-center justify-between">
-                            <div>
+                            <div className="flex-1">
                                 <span className="font-medium text-gray-800">思考模式</span>
-                                <p className="text-xs text-gray-500">开启后，AI 会进行更深入的思考，回答可能更全面，但响应会稍慢。</p>
+                                <p className="text-xs text-gray-500">
+                                    {chatModelSupportsThinking 
+                                        ? '开启后，AI 会进行更深入的思考，回答可能更全面，但响应会稍慢。' 
+                                        : '当前对话模型不支持思考模式，请在全局设置中选择支持的模型（如包含 thinking、o1、o3 的模型）。'}
+                                </p>
                             </div>
                             <label className="relative inline-flex items-center cursor-pointer">
                                 <input
                                     type="checkbox"
                                     checked={conversation.thinkingMode ?? true}
                                     onChange={(e) => onUpdateConversation(conversation.id, { thinkingMode: e.target.checked })}
+                                    disabled={!chatModelSupportsThinking}
                                     className="sr-only peer"
                                 />
-                                <div className="w-11 h-6 bg-gray-300 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-500"></div>
+                                <div className={`w-11 h-6 ${chatModelSupportsThinking ? 'bg-gray-300' : 'bg-gray-200 cursor-not-allowed'} peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all ${chatModelSupportsThinking ? 'peer-checked:bg-blue-500' : 'peer-checked:bg-gray-400'} ${!chatModelSupportsThinking ? 'opacity-50' : ''}`}></div>
                             </label>
                         </div>
                         <div className="flex items-center justify-between">
@@ -84,6 +96,7 @@ const ConversationSettingsModal: React.FC<ConversationSettingsModalProps> = ({ i
                                 className="w-20 bg-white border border-gray-300 rounded-md px-2 py-1 text-sm text-center focus:outline-none focus:ring-2 focus:ring-blue-500"
                                 min="1"
                                 max="50"
+                                autoComplete="off"
                             />
                         </div>
                     </div>

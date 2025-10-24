@@ -1,6 +1,6 @@
 // fix: Corrected import path to resolve module.
 import { ChatMessage } from '../types/index';
-import { summarizeText, generateTitle } from './geminiService';
+import { summarizeText, generateTitle } from './aiService';
 // fix: Corrected import path to resolve module.
 import { NEW_CONVERSATION_TITLE } from '../constants/index';
 

@@ -17,6 +17,7 @@ export interface AppSettings {
   newConversationShortcut: string;
   fontFamily: string;
   fontSize: number;
+  lineHeight: number;
   // AI Configuration
   openRouterApiKey: string;
   chatModel: string; // 对话使用的模型
@@ -30,9 +31,10 @@ const defaultSettings: AppSettings = {
   newConversationShortcut: 'Control+N',
   fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol"',
   fontSize: 14,
+  lineHeight: 1.6,
   openRouterApiKey: '',
-  chatModel: 'google/gemini-2.0-flash-thinking-exp:free',
-  summaryModel: 'google/gemini-2.0-flash-exp:free',
+  chatModel: 'qwen/qwen3-30b-a3b',
+  summaryModel: 'qwen/qwen3-8b',
 };
 
 export const useAppSettings = () => {
