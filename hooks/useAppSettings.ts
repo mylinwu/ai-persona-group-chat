@@ -32,7 +32,7 @@ const defaultSettings: AppSettings = {
   fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol"',
   fontSize: 14,
   lineHeight: 1.6,
-  openRouterApiKey: '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',
+  openRouterApiKey: '',
   chatModel: 'qwen/qwen3-30b-a3b',
   summaryModel: 'qwen/qwen3-8b',
 };

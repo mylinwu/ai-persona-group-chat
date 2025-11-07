@@ -317,7 +317,6 @@ const GlobalSettings: React.FC<GlobalSettingsProps> = ({ isOpen, onClose, settin
                                     value={settings.chatModel}
                                     onChange={(e) => setSetting('chatModel', e.target.value)}
                                     className="w-full bg-white border border-gray-300 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                                    disabled
                                 >
                                     {models.length === 0 ? (
                                         <option value={settings.chatModel}>{settings.chatModel}</option>
